@@ -118,6 +118,66 @@ def create_app(db_path="sqlite:///thermo.db"):
             db.session.commit()
             return jsonify({"ok": True, "id": sch.id})
 
+        # --- API: get settings for a thermostat ---
+    @app.route("/api/thermostats/<int:t_id>/settings", methods=["GET"])
+    def get_settings(t_id):
+        t = Thermostat.query.get_or_404(t_id)
+        return jsonify({
+            "hysteresis_up": t.hysteresis_up,
+            "hysteresis_down": t.hysteresis_down,
+            "min_temp": t.min_temp,
+            "max_temp": t.max_temp,
+            "eco_setpoint": t.eco_setpoint,
+            "away_mode": t.away_mode
+        })
+
+    # --- API: update settings (partial allowed) ---
+    @app.route("/api/thermostats/<int:t_id>/settings", methods=["POST"])
+    def update_settings(t_id):
+        t = Thermostat.query.get_or_404(t_id)
+        body = request.json or {}
+
+        # Helper to parse floats safely
+        def getf(key, current):
+            if key in body:
+                try:
+                    return float(body[key])
+                except Exception:
+                    abort(400, f"{key} must be a number")
+            return current
+
+        t.hysteresis_up = getf("hysteresis_up", t.hysteresis_up)
+        t.hysteresis_down = getf("hysteresis_down", t.hysteresis_down)
+        t.min_temp = getf("min_temp", t.min_temp)
+        t.max_temp = getf("max_temp", t.max_temp)
+        t.eco_setpoint = getf("eco_setpoint", t.eco_setpoint)
+
+        # boolean
+        if "away_mode" in body:
+            t.away_mode = bool(body["away_mode"])
+
+        # validation: sensible ranges
+        if t.min_temp >= t.max_temp:
+            abort(400, "min_temp must be less than max_temp")
+        if not ( -50.0 <= t.min_temp <= 100.0 and -50.0 <= t.max_temp <= 100.0):
+            abort(400, "temperatures must be in a reasonable range")
+
+        # clamp current setpoint into allowed range
+        if t.current_setpoint < t.min_temp:
+            t.current_setpoint = t.min_temp
+        if t.current_setpoint > t.max_temp:
+            t.current_setpoint = t.max_temp
+
+        db.session.add(t)
+        db.session.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/settings/<int:t_id>")
+    def settings_page(t_id):
+        # render template — the page will call the API to load/save
+        return render_template("settings.html")
+
+
     return app
 
 if __name__ == "__main__":
