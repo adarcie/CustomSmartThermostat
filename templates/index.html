@@ -8,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
   <style>
     body { padding: 0.5rem; background:#fafafa; }
-    .thermo-card { margin-bottom: .75rem; }
+    .thermo-card { margin-bottom: .75rem; border-radius: .9rem; }
     .big { font-size:1.6rem; font-weight:600; }
     .muted { color:#666; font-size:.9rem; }
     .graph-canvas { height: 200px !important; width: 100% !important; }
@@ -46,8 +46,7 @@
             <div>
               <button class="btn btn-sm btn-success" data-action="toggle">Toggle</button>
               <button class="btn btn-sm btn-outline-secondary" data-action="schedule">Schedule</button>
-              <a class="btn btn-sm btn-outline-info" href="/settings/{{id_placeholder}}" data-action="settings">Settings</a>
-
+              <button class="btn btn-sm btn-outline-info" data-action="settings">Settings</button>
             </div>
           </div>
 
@@ -66,7 +65,14 @@
     async function load() {
       const listEl = document.getElementById("list");
       const tpl = document.getElementById("thermo-template");
-      const thermostats = await fetchJSON(apiBase + "/thermostats");
+      let thermostats;
+      try {
+        thermostats = await fetchJSON(apiBase + "/thermostats");
+      } catch (e) {
+        listEl.innerHTML = `<div class="alert alert-danger">Error loading thermostats: ${e}</div>`;
+        return;
+      }
+
       listEl.innerHTML = "";
       thermostats.forEach(t => {
         const node = tpl.content.cloneNode(true);
@@ -75,30 +81,48 @@
         node.querySelector("[data-role=name]").textContent = t.name;
         node.querySelector("[data-role=location]").textContent = t.location || "";
         const spEl = node.querySelector("[data-role=setpoint]");
-        spEl.textContent = t.setpoint.toFixed(1) + "°C";
+        // keep compatibility with property names
+        const spVal = (t.setpoint !== undefined) ? t.setpoint : t.current_setpoint;
+        spEl.textContent = spVal.toFixed(1) + "°C";
         node.querySelector("[data-role=state]").textContent = t.is_on ? "On" : "Off";
 
         // buttons
         node.querySelectorAll("[data-action]").forEach(btn => {
           btn.addEventListener("click", async (ev) => {
             const action = btn.dataset.action;
-            if (action === "incr" || action === "decr") {
-              let newSp = t.setpoint + (action==="incr"? 0.5 : -0.5);
-              await fetchJSON(`${apiBase}/thermostats/${t.id}/setpoint`, {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({setpoint: newSp})
-              });
-              t.setpoint = newSp;
-              spEl.textContent = t.setpoint.toFixed(1) + "°C";
-              refreshChart(card, t.id);
-            } else if (action === "toggle") {
-              const resp = await fetchJSON(`${apiBase}/thermostats/${t.id}/toggle`, {method:"POST"});
-              t.is_on = resp.is_on;
-              node.querySelector("[data-role=state]").textContent = t.is_on ? "On" : "Off";
-              refreshChart(card, t.id);
-            } else if (action === "schedule") {
-              alert("Schedule editor not implemented in v1 — will open modal here.");
+            try {
+              if (action === "incr" || action === "decr") {
+                // compute new setpoint locally, then POST setpoint (matches server API)
+                let cur = spVal;
+                // Try to read latest from DOM in case it changed
+                const displayed = parseFloat(spEl.textContent) || cur;
+                cur = displayed;
+                let newSp = cur + (action==="incr"? 0.5 : -0.5);
+                // clamp if thermostat exposes min/max (optional)
+                if (t.min_temp !== undefined && newSp < t.min_temp) newSp = t.min_temp;
+                if (t.max_temp !== undefined && newSp > t.max_temp) newSp = t.max_temp;
+                await fetchJSON(`${apiBase}/thermostats/${t.id}/setpoint`, {
+                  method: "POST",
+                  headers: {"Content-Type":"application/json"},
+                  body: JSON.stringify({setpoint: newSp})
+                });
+                // update UI and refresh chart
+                spEl.textContent = newSp.toFixed(1) + "°C";
+                refreshChart(card, t.id);
+              } else if (action === "toggle") {
+                const resp = await fetchJSON(`${apiBase}/thermostats/${t.id}/toggle`, {method:"POST"});
+                t.is_on = resp.is_on;
+                node.querySelector("[data-role=state]").textContent = t.is_on ? "On" : "Off";
+                refreshChart(card, t.id);
+              } else if (action === "schedule") {
+                alert("Schedule editor not implemented in v1 — will open modal here.");
+              } else if (action === "settings") {
+                // NAVIGATE to server-side settings page
+                window.location.href = `/settings/${t.id}`;
+              }
+            } catch (err) {
+              console.error("Action error", err);
+              alert("Action failed: " + err);
             }
           });
         });
@@ -131,7 +155,6 @@
     async function refreshChart(card, tid) {
       const chart = chartStore.get(tid);
       if (!chart) return;
-      // fetch last 48 points
       try {
         const data = await fetchJSON(`${apiBase}/thermostats/${tid}/history?n=48`);
         const labels = data.map(r => new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
@@ -140,11 +163,12 @@
         chart.data.datasets[1].data = data.map(r => r.setpoint);
         chart.update();
       } catch (e) {
-        console.error("chart refresh error", e);
+        // non-fatal; chart will be empty
+        // console.error("chart refresh error", e);
       }
     }
 
-    // auto refresh every 30s
+    // auto refresh every 30s (but don't interrupt user interactions)
     setInterval(load, 30000);
     load();
   </script>
