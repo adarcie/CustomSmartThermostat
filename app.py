@@ -3,6 +3,8 @@ from flask_cors import CORS
 from models import db, Thermostat, Reading, Schedule
 from datetime import datetime, timedelta
 import random
+from mqtt_bridge import MqttBridge
+mqtt = MqttBridge()
 
 def create_app(db_path="sqlite:///thermo.db"):
     app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -16,19 +18,41 @@ def create_app(db_path="sqlite:///thermo.db"):
         return render_template("index.html")
 
     # --- API: thermostats list ---
-    @app.route("/api/thermostats", methods=["GET"])
+    @app.route("/api/thermostats")
     def list_thermostats():
-        ts = Thermostat.query.all()
-        out = []
-        for t in ts:
-            out.append({
-                "id": t.id,
-                "name": t.name,
-                "location": t.location,
-                "setpoint": t.current_setpoint,
-                "is_on": t.is_on
-            })
-        return jsonify(out)
+        result = []
+        
+        # First check if we have MQTT data
+        if mqtt.temps:
+            for tid, temp in mqtt.temps.items():
+                state = mqtt.states.get(tid, {})
+                result.append({
+                    "id": tid,
+                    "temperature": temp,
+                    "setpoint": state.get("setpoint", 20.0),
+                    "heating": state.get("heating", False),
+                    "name": f"Thermostat {tid}",
+                    "location": "Unknown"
+                })
+        
+        # If no MQTT data, use database thermostats
+        if not result:
+            db_thermostats = Thermostat.query.all()
+            for t in db_thermostats:
+                # Generate simulated current temperature
+                simulated_temp = t.current_setpoint + random.uniform(-2, 2)
+                result.append({
+                    "id": t.id,
+                    "name": t.name,
+                    "location": t.location,
+                    "temperature": simulated_temp,
+                    "setpoint": t.current_setpoint,
+                    "heating": t.is_on and simulated_temp < t.current_setpoint,
+                    "is_on": t.is_on
+                })
+        
+        return jsonify(result)
+
 
     # --- API: single thermostat ---
     @app.route("/api/thermostats/<int:t_id>", methods=["GET"])
@@ -43,21 +67,11 @@ def create_app(db_path="sqlite:///thermo.db"):
         })
 
     # --- API: set setpoint ---
-    @app.route("/api/thermostats/<int:t_id>/setpoint", methods=["POST"])
-    def set_setpoint(t_id):
-        t = Thermostat.query.get_or_404(t_id)
-        body = request.json or {}
-        try:
-            sp = float(body.get("setpoint"))
-        except Exception:
-            return abort(400, "setpoint required")
-        t.current_setpoint = sp
-        db.session.add(t)
-        # log a reading (placeholder temperature random)
-        r = Reading(thermostat_id=t.id, temperature=sp + random.uniform(-1.5, 1.5), setpoint=sp, is_on=t.is_on)
-        db.session.add(r)
-        db.session.commit()
-        return jsonify({"ok": True, "setpoint": sp})
+    @app.route("/api/thermostats/<tid>/setpoint", methods=["POST"])
+    def set_setpoint(tid):
+        value = request.json["setpoint"]
+        mqtt.set_setpoint(tid, value)
+        return jsonify({"ok": True})
 
     # --- API: toggle on/off ---
     @app.route("/api/thermostats/<int:t_id>/toggle", methods=["POST"])
@@ -182,4 +196,39 @@ def create_app(db_path="sqlite:///thermo.db"):
 
 if __name__ == "__main__":
     app = create_app()
+    
+    # Initialize database and create tables
+    with app.app_context():
+        db.create_all()  # This creates all tables
+        
+        # Create a default thermostat if none exists
+        if Thermostat.query.count() == 0:
+            default_thermo = Thermostat(
+                name="Living Room",
+                location="Main Floor",
+                current_setpoint=20.0,  # 20°C default
+                is_on=True,
+                hysteresis_up=0.5,
+                hysteresis_down=0.5,
+                min_temp=16.0,
+                max_temp=26.0,
+                eco_setpoint=18.0,
+                away_mode=False
+            )
+            db.session.add(default_thermo)
+            
+            # Add some sample historical data
+            for i in range(48):
+                reading = Reading(
+                    thermostat_id=1,
+                    temperature=20.0 + random.uniform(-1, 1),
+                    setpoint=20.0,
+                    is_on=True,
+                    timestamp=datetime.now() - timedelta(minutes=i*30)
+                )
+                db.session.add(reading)
+            
+            db.session.commit()
+            print("Created default thermostat with sample data")
+    
     app.run(host="0.0.0.0", port=5000, debug=True)
