@@ -16,8 +16,7 @@ def create_app(db_path="sqlite:///thermo.db"):
     @app.route("/")
     def index():
         return render_template("index.html")
-
-    # --- API: thermostats list ---
+    
     @app.route("/api/thermostats")
     def list_thermostats():
         result = []
