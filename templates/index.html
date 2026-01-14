@@ -1,204 +1,81 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Thermostat Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
-  <style>
-    body { padding: 0.5rem; background:#fafafa; }
-    .thermo-card { margin-bottom: .75rem; border-radius: .9rem; }
-    .big { font-size:1.6rem; font-weight:600; }
-    .muted { color:#666; font-size:.9rem; }
-    .graph-canvas { height: 200px !important; width: 100% !important; }
-  </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Living Room Thermostat</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 420px;
+            margin: auto;
+            padding: 20px;
+        }
+
+        .card {
+            background: #f2f2f2;
+            padding: 20px;
+            border-radius: 12px;
+        }
+
+        h2 {
+            text-align: center;
+        }
+
+        p {
+            font-size: 18px;
+        }
+
+        input, button {
+            width: 100%;
+            padding: 12px;
+            font-size: 18px;
+            margin-top: 10px;
+        }
+
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            border-radius: 6px;
+        }
+    </style>
 </head>
+
 <body>
-  <div class="container">
-    <h3 class="mb-2">Thermostats</h3>
-    <div id="list"></div>
-  </div>
 
-  <template id="thermo-template">
-    <div class="card thermo-card">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <div class="big" data-role="name">Name</div>
-            <div class="muted" data-role="location">Location</div>
-            <div class="muted" data-role="temp">Temp: --°C</div>
-          </div>
-          <div class="text-end">
-            <div data-role="setpoint" class="big">21.0°C</div>
-            <div class="mt-1">
-              <button class="btn btn-sm btn-outline-primary" data-action="decr">-</button>
-              <button class="btn btn-sm btn-outline-primary" data-action="incr">+</button>
-            </div>
-          </div>
-        </div>
+<div class="card">
+    <h2>Living Room</h2>
 
-        <div class="mt-3">
-          <div class="d-flex justify-content-between align-items-center">
-            <div>
-              <span class="muted">State:</span>
-              <span data-role="state">Off</span>
-            </div>
-            <div>
-              <button class="btn btn-sm btn-success" data-action="toggle">Toggle</button>
-              <button class="btn btn-sm btn-outline-secondary" data-action="schedule">Schedule</button>
-              <button class="btn btn-sm btn-outline-info" data-action="settings">Settings</button>
-            </div>
-          </div>
+    <p><strong>Temperature:</strong>
+        {{ thermostat.temperature if thermostat.temperature is not none else "—" }} °C
+    </p>
 
-          <div class="mt-3">
-            <canvas class="graph-canvas" data-role="chart"></canvas>
-          </div>
-        </div>
-      </div>
-    </div>
-  </template>
+    <p><strong>Setpoint:</strong>
+        {{ thermostat.setpoint if thermostat.setpoint is not none else "—" }} °C
+    </p>
 
-  <script>
-    const apiBase = "/api";
-    async function fetchJSON(url, opts){ const r = await fetch(url, opts); return r.ok? r.json() : Promise.reject(await r.text()); }
+    <p><strong>Heating:</strong>
+        {% if thermostat.heating is none %}
+            —
+        {% elif thermostat.heating %}
+            ON
+        {% else %}
+            OFF
+        {% endif %}
+    </p>
 
-    async function load() {
-      const listEl = document.getElementById("list");
-      const tpl = document.getElementById("thermo-template");
-      let thermostats;
-      try {
-        thermostats = await fetchJSON(apiBase + "/thermostats");
-      } catch (e) {
-        listEl.innerHTML = `<div class="alert alert-danger">Error loading thermostats: ${e}</div>`;
-        return;
-      }
+    <form method="POST">
+        <input
+            type="number"
+            step="0.5"
+            name="setpoint"
+            placeholder="New setpoint"
+            required
+        >
+        <button type="submit">Set Temperature</button>
+    </form>
+</div>
 
-      listEl.innerHTML = "";
-      thermostats.forEach(t => {
-        const node = tpl.content.cloneNode(true);
-        const card = node.querySelector(".card");
-        // store both ids
-        card.dataset.tid = t.id;      // MQTT id (string)
-        card.dataset.dbId = t.db_id || ""; // numeric DB id if available
-        node.querySelector("[data-role=name]").textContent = t.name || t.id;
-        node.querySelector("[data-role=location]").textContent = t.location || "";
-        const spEl = node.querySelector("[data-role=setpoint]");
-        spEl.textContent = (t.setpoint !== undefined ? t.setpoint : (t.current_setpoint||20)).toFixed(1) + "°C";
-
-        // show MQTT temperature if present
-        const tempEl = node.querySelector("[data-role=temp]");
-        if (t.temperature !== undefined && t.temperature !== null) {
-          tempEl.textContent = "Temp: " + parseFloat(t.temperature).toFixed(1) + "°C";
-        } else {
-          tempEl.textContent = "Temp: --°C";
-        }
-
-        node.querySelector("[data-role=state]").textContent = t.heating ? "On" : "Off";
-
-        // buttons
-        node.querySelectorAll("[data-action]").forEach(btn => {
-          btn.addEventListener("click", async (ev) => {
-            const action = btn.dataset.action;
-            try {
-              if (action === "incr" || action === "decr") {
-                // disable buttons while request is in-flight
-                btn.disabled = true;
-                const current = parseFloat(spEl.textContent) || 20;
-                let newSp = current + (action==="incr"? 0.5 : -0.5);
-                // optional local clamp if min/max provided
-                if (t.min_temp !== undefined && newSp < t.min_temp) newSp = t.min_temp;
-                if (t.max_temp !== undefined && newSp > t.max_temp) newSp = t.max_temp;
-                // send to flexible endpoint (tid may be string or numeric)
-                await fetchJSON(`${apiBase}/thermostats/${encodeURIComponent(t.id)}/setpoint`, {
-                  method: "POST",
-                  headers: {"Content-Type":"application/json"},
-                  body: JSON.stringify({setpoint: newSp})
-                });
-                spEl.textContent = newSp.toFixed(1) + "°C";
-                refreshChart(card, t.db_id || t.id);
-                btn.disabled = false;
-              } else if (action === "toggle") {
-                // if thermostat has db_id, use the toggle DB endpoint, otherwise toggle via command topic (not implemented)
-                if (card.dataset.dbId) {
-                  await fetchJSON(`${apiBase}/thermostats/${card.dataset.dbId}/toggle`, {method:"POST"});
-                } else {
-                  // send a generic command via setpoint toggle or custom command topic — not implemented in v1
-                  alert("Toggle not supported for MQTT-only nodes yet.");
-                }
-                refreshChart(card, t.db_id || t.id);
-              } else if (action === "schedule") {
-                alert("Schedule editor not implemented in v1 — will open modal here.");
-              } else if (action === "settings") {
-                if (card.dataset.dbId) {
-                  window.location.href = `/settings/${card.dataset.dbId}`;
-                } else {
-                  alert("Settings are only available for DB-backed thermostats.");
-                }
-              }
-            } catch (err) {
-              console.error("Action error", err);
-              alert("Action failed: " + err);
-              btn.disabled = false;
-            }
-          });
-        });
-
-        // attach chart (will attempt to use db_id for history)
-        setTimeout(()=>setupChart(card, t.db_id || t.id), 50);
-
-        listEl.appendChild(node);
-      });
-    }
-
-    // Chart helpers
-    const chartStore = new Map();
-    function setupChart(card, tid) {
-      const canvas = card.querySelector("[data-role=chart]");
-      const ctx = canvas.getContext("2d");
-      const cfg = {
-        type: "line",
-        data: { labels: [], datasets: [
-          { label:"Temperature", data:[], tension:0.3, fill:false, yAxisID:"y" },
-          { label:"Setpoint", data:[], tension:0.3, fill:false, yAxisID:"y" }
-        ]},
-        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:true}}, scales:{y:{ beginAtZero:false }}}
-      };
-      const chart = new Chart(ctx, cfg);
-      chartStore.set(tid, chart);
-      refreshChart(card, tid);
-    }
-
-    async function refreshChart(card, tid) {
-      const chart = chartStore.get(tid);
-      if (!chart) return;
-      // if tid is numeric DB id, fetch history; otherwise skip
-      if (!tid || String(tid).trim()==="") return;
-      try {
-        const n = 48;
-        const data = await fetchJSON(`${apiBase}/thermostats/${encodeURIComponent(tid)}/history?n=${n}`);
-        if (!Array.isArray(data) || data.length === 0) {
-          // no history available
-          chart.data.labels = [];
-          chart.data.datasets[0].data = [];
-          chart.data.datasets[1].data = [];
-          chart.update();
-          return;
-        }
-        const labels = data.map(r => new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = data.map(r => r.temperature);
-        chart.data.datasets[1].data = data.map(r => r.setpoint);
-        chart.update();
-      } catch (e) {
-        // non-fatal
-        console.warn("chart refresh error", e);
-      }
-    }
-
-    // auto refresh every 30s
-    setInterval(load, 30000);
-    load();
-  </script>
 </body>
 </html>

@@ -1,36 +1,57 @@
 import json
+import threading
 import paho.mqtt.client as mqtt
 
-BROKER_IP = "192.168.4.26"  # Pi 4 IP
+BROKER_IP = "192.168.4.26"   # <-- PI IP
+BROKER_PORT = 1883
+THERMO_ID = "livingroom"
+
+# Single source of truth for Flask
+thermostat_state = {
+    "temperature": None,
+    "setpoint": None,
+    "heating": None
+}
+
 
 class MqttBridge:
     def __init__(self):
-        self.temps = {}
-        self.states = {}
+        self.client = mqtt.Client(client_id="flask-dashboard")
 
-        self.client = mqtt.Client(
-            client_id="flask-dashboard",
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION1
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+
+        self.client.connect(BROKER_IP, BROKER_PORT, 60)
+
+        thread = threading.Thread(
+            target=self.client.loop_forever,
+            daemon=True
         )
-        self.client.on_message = self._on_message
+        thread.start()
 
-        self.client.connect(BROKER_IP, 1883, 60)
-        self.client.subscribe("thermostat/+/temperature")
-        self.client.subscribe("thermostat/+/state")
-        self.client.loop_start()
+    def on_connect(self, client, userdata, flags, rc):
+        print("Flask connected to MQTT, rc =", rc)
+        client.subscribe(f"thermostat/{THERMO_ID}/#", qos=1)
 
-    def _on_message(self, client, userdata, msg):
-        tid = msg.topic.split("/")[1]
-        payload = json.loads(msg.payload.decode())
+    def on_message(self, client, userdata, msg):
+        global thermostat_state
 
-        if msg.topic.endswith("/temperature"):
-            self.temps[tid] = payload["temperature"]
+        topic = msg.topic
+        payload = msg.payload.decode()
 
-        elif msg.topic.endswith("/state"):
-            self.states[tid] = payload
+        if topic == f"thermostat/{THERMO_ID}/temperature":
+            data = json.loads(payload)
+            thermostat_state["temperature"] = data["temperature"]
 
-    def set_setpoint(self, tid, value):
+        elif topic == f"thermostat/{THERMO_ID}/state":
+            data = json.loads(payload)
+            thermostat_state["setpoint"] = data["setpoint"]
+            thermostat_state["heating"] = data["heating"]
+
+    def publish_setpoint(self, value):
         self.client.publish(
-            f"thermostat/{tid}/setpoint",
-            value
+            f"thermostat/{THERMO_ID}/setpoint",
+            value,
+            qos=1,
+            retain=True
         )
