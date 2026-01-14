@@ -1,10 +1,44 @@
+# app.py (full — replace existing)
 from flask import Flask, jsonify, request, render_template, abort
 from flask_cors import CORS
 from models import db, Thermostat, Reading, Schedule
 from datetime import datetime, timedelta
 import random
 from mqtt_bridge import MqttBridge
+
 mqtt = MqttBridge()
+
+def _normalize_name_key(name):
+    if not name:
+        return ""
+    return "".join(name.lower().split())
+
+def find_db_for_tid(tid):
+    """Try to map an MQTT thermostat id (string or numeric) to a DB thermostat.
+    Returns (db_id or None, Thermostat instance or None)
+    """
+    # try numeric id
+    try:
+        nid = int(tid)
+        tdb = Thermostat.query.get(nid)
+        if tdb:
+            return nid, tdb
+    except Exception:
+        pass
+
+    # try exact name match
+    all_ts = Thermostat.query.all()
+    tid_norm = _normalize_name_key(tid)
+    for t in all_ts:
+        if t.name and _normalize_name_key(t.name) == tid_norm:
+            return t.id, t
+
+    # try substring match
+    for t in all_ts:
+        if t.name and tid_norm in _normalize_name_key(t.name):
+            return t.id, t
+
+    return None, None
 
 def create_app(db_path="sqlite:///thermo.db"):
     app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -16,44 +50,64 @@ def create_app(db_path="sqlite:///thermo.db"):
     @app.route("/")
     def index():
         return render_template("index.html")
-    
+
     @app.route("/api/thermostats")
     def list_thermostats():
         result = []
-        
-        # First check if we have MQTT data
-        if mqtt.temps:
+
+        # If we have MQTT data, include it first (scales to many devices)
+        if getattr(mqtt, "temps", None):
             for tid, temp in mqtt.temps.items():
                 state = mqtt.states.get(tid, {})
+                db_id, db_obj = find_db_for_tid(tid)
                 result.append({
+                    # id is the MQTT id (string); db_id is numeric DB id when available
                     "id": tid,
+                    "db_id": db_id,
+                    "name": db_obj.name if db_obj else f"Thermostat {tid}",
+                    "location": db_obj.location if db_obj else "Unknown",
                     "temperature": temp,
-                    "setpoint": state.get("setpoint", 20.0),
-                    "heating": state.get("heating", False),
-                    "name": f"Thermostat {tid}",
-                    "location": "Unknown"
+                    "setpoint": state.get("setpoint", db_obj.current_setpoint if db_obj else 20.0),
+                    "heating": state.get("heating", False)
                 })
-        
-        # If no MQTT data, use database thermostats
+
+        # If no MQTT data (or as fallback), include DB thermostats
         if not result:
             db_thermostats = Thermostat.query.all()
             for t in db_thermostats:
-                # Generate simulated current temperature
                 simulated_temp = t.current_setpoint + random.uniform(-2, 2)
                 result.append({
-                    "id": t.id,
+                    "id": str(t.id),          # keep id as string for consistency
+                    "db_id": t.id,
                     "name": t.name,
                     "location": t.location,
                     "temperature": simulated_temp,
                     "setpoint": t.current_setpoint,
-                    "heating": t.is_on and simulated_temp < t.current_setpoint,
-                    "is_on": t.is_on
+                    "heating": t.is_on and simulated_temp < t.current_setpoint
                 })
-        
+
         return jsonify(result)
 
+    # Flexible history endpoint: supports numeric DB id or MQTT id
+    @app.route("/api/thermostats/<path:tid>/history", methods=["GET"])
+    def history_by_tid(tid):
+        # allow ?n= parameter
+        n = int(request.args.get("n", 48))
+        # try map to DB id
+        db_id, db_obj = find_db_for_tid(tid)
+        if db_id:
+            rows = Reading.query.filter_by(thermostat_id=db_id).order_by(Reading.timestamp.desc()).limit(n).all()
+            rows.reverse()
+            return jsonify([{
+                "timestamp": r.timestamp.isoformat(),
+                "temperature": r.temperature,
+                "setpoint": r.setpoint,
+                "is_on": r.is_on
+            } for r in rows])
+        # no DB history available for this MQTT-only thermostat -> return empty or synthetic
+        return jsonify([])
 
-    # --- API: single thermostat ---
+    # --- API: single thermostat (DB) ---
     @app.route("/api/thermostats/<int:t_id>", methods=["GET"])
     def get_thermostat(t_id):
         t = Thermostat.query.get_or_404(t_id)
@@ -65,14 +119,21 @@ def create_app(db_path="sqlite:///thermo.db"):
             "is_on": t.is_on
         })
 
-    # --- API: set setpoint ---
-    @app.route("/api/thermostats/<tid>/setpoint", methods=["POST"])
+    # --- API: set setpoint (flexible tid; tid may be MQTT id string or numeric) ---
+    @app.route("/api/thermostats/<path:tid>/setpoint", methods=["POST"])
     def set_setpoint(tid):
-        value = request.json["setpoint"]
+        body = request.json or {}
+        if "setpoint" not in body:
+            return abort(400, "setpoint required")
+        try:
+            value = float(body["setpoint"])
+        except Exception:
+            return abort(400, "invalid setpoint")
+        # publish via MQTT; mqtt.set_setpoint should publish to thermostat/<tid>/setpoint
         mqtt.set_setpoint(tid, value)
         return jsonify({"ok": True})
 
-    # --- API: toggle on/off ---
+    # --- API: toggle on/off (DB) ---
     @app.route("/api/thermostats/<int:t_id>/toggle", methods=["POST"])
     def toggle(t_id):
         t = Thermostat.query.get_or_404(t_id)
@@ -88,50 +149,7 @@ def create_app(db_path="sqlite:///thermo.db"):
         db.session.commit()
         return jsonify({"ok": True, "is_on": t.is_on})
 
-    # --- API: get history for chart (returns last N points) ---
-    @app.route("/api/thermostats/<int:t_id>/history", methods=["GET"])
-    def history(t_id):
-        t = Thermostat.query.get_or_404(t_id)
-        # number of points
-        n = int(request.args.get("n", 48))
-        rows = Reading.query.filter_by(thermostat_id=t.id).order_by(Reading.timestamp.desc()).limit(n).all()
-        rows.reverse()
-        return jsonify([{
-            "timestamp": r.timestamp.isoformat(),
-            "temperature": r.temperature,
-            "setpoint": r.setpoint,
-            "is_on": r.is_on
-        } for r in rows])
-
-    # --- API: schedules (basic CRUD) ---
-    @app.route("/api/thermostats/<int:t_id>/schedules", methods=["GET","POST"])
-    def schedules(t_id):
-        t = Thermostat.query.get_or_404(t_id)
-        if request.method == "GET":
-            s = Schedule.query.filter_by(thermostat_id=t.id).all()
-            return jsonify([{
-                "id": sch.id,
-                "weekday_mask": sch.weekday_mask,
-                "time_h": sch.time_h,
-                "time_m": sch.time_m,
-                "setpoint": sch.setpoint,
-                "enabled": sch.enabled
-            } for sch in s])
-        else:
-            body = request.json or {}
-            sch = Schedule(
-                thermostat_id = t.id,
-                weekday_mask = int(body.get("weekday_mask", 127)),
-                time_h = int(body.get("time_h", 7)),
-                time_m = int(body.get("time_m", 0)),
-                setpoint = float(body.get("setpoint", t.current_setpoint)),
-                enabled = bool(body.get("enabled", True))
-            )
-            db.session.add(sch)
-            db.session.commit()
-            return jsonify({"ok": True, "id": sch.id})
-
-        # --- API: get settings for a thermostat ---
+    # --- API: get settings for a thermostat (DB) ---
     @app.route("/api/thermostats/<int:t_id>/settings", methods=["GET"])
     def get_settings(t_id):
         t = Thermostat.query.get_or_404(t_id)
@@ -144,13 +162,12 @@ def create_app(db_path="sqlite:///thermo.db"):
             "away_mode": t.away_mode
         })
 
-    # --- API: update settings (partial allowed) ---
+    # --- API: update settings (DB) ---
     @app.route("/api/thermostats/<int:t_id>/settings", methods=["POST"])
     def update_settings(t_id):
         t = Thermostat.query.get_or_404(t_id)
         body = request.json or {}
 
-        # Helper to parse floats safely
         def getf(key, current):
             if key in body:
                 try:
@@ -165,17 +182,14 @@ def create_app(db_path="sqlite:///thermo.db"):
         t.max_temp = getf("max_temp", t.max_temp)
         t.eco_setpoint = getf("eco_setpoint", t.eco_setpoint)
 
-        # boolean
         if "away_mode" in body:
             t.away_mode = bool(body["away_mode"])
 
-        # validation: sensible ranges
         if t.min_temp >= t.max_temp:
             abort(400, "min_temp must be less than max_temp")
-        if not ( -50.0 <= t.min_temp <= 100.0 and -50.0 <= t.max_temp <= 100.0):
+        if not (-50.0 <= t.min_temp <= 100.0 and -50.0 <= t.max_temp <= 100.0):
             abort(400, "temperatures must be in a reasonable range")
 
-        # clamp current setpoint into allowed range
         if t.current_setpoint < t.min_temp:
             t.current_setpoint = t.min_temp
         if t.current_setpoint > t.max_temp:
@@ -187,25 +201,20 @@ def create_app(db_path="sqlite:///thermo.db"):
 
     @app.route("/settings/<int:t_id>")
     def settings_page(t_id):
-        # render template — the page will call the API to load/save
         return render_template("settings.html")
-
 
     return app
 
+
 if __name__ == "__main__":
     app = create_app()
-    
-    # Initialize database and create tables
     with app.app_context():
-        db.create_all()  # This creates all tables
-        
-        # Create a default thermostat if none exists
+        db.create_all()
         if Thermostat.query.count() == 0:
             default_thermo = Thermostat(
                 name="Living Room",
                 location="Main Floor",
-                current_setpoint=20.0,  # 20°C default
+                current_setpoint=20.0,
                 is_on=True,
                 hysteresis_up=0.5,
                 hysteresis_down=0.5,
@@ -215,8 +224,6 @@ if __name__ == "__main__":
                 away_mode=False
             )
             db.session.add(default_thermo)
-            
-            # Add some sample historical data
             for i in range(48):
                 reading = Reading(
                     thermostat_id=1,
@@ -226,8 +233,6 @@ if __name__ == "__main__":
                     timestamp=datetime.now() - timedelta(minutes=i*30)
                 )
                 db.session.add(reading)
-            
             db.session.commit()
             print("Created default thermostat with sample data")
-    
     app.run(host="0.0.0.0", port=5000, debug=True)
