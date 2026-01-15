@@ -1,29 +1,33 @@
-from flask import Flask, render_template, request, redirect, url_for
-from mqtt_bridge import MqttBridge, thermostat_state
+from flask import Flask, render_template, request, redirect, jsonify
+from mqtt_bridge import MqttBridge
 
 app = Flask(__name__)
-
-# Start MQTT bridge immediately
 mqtt = MqttBridge()
 
-
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
+    return render_template("index.html")
+
+@app.route("/api/state")
+def api_state():
+    return jsonify(mqtt.get_state())
+
+@app.route("/setpoint", methods=["POST"])
+def set_setpoint():
+    mqtt.publish_setpoint(float(request.form["setpoint"]))
+    return redirect("/")
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
     if request.method == "POST":
-        try:
-            new_setpoint = float(request.form["setpoint"])
-            mqtt.publish_setpoint(new_setpoint)
-        except ValueError:
-            pass
+        mqtt.publish_settings({
+            "hysteresis": float(request.form["hysteresis"]),
+            "steps_on": int(request.form["steps_on"]),
+            "steps_off": int(request.form["steps_off"])
+        })
+        return redirect("/settings")
 
-        return redirect(url_for("index"))
-
-    return render_template(
-        "index.html",
-        thermostat=thermostat_state
-    )
-
+    return render_template("settings.html")
 
 if __name__ == "__main__":
-    # Accessible from phone on same network
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)

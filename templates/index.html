@@ -1,81 +1,41 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Living Room Thermostat</title>
-
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 420px;
-            margin: auto;
-            padding: 20px;
-        }
-
-        .card {
-            background: #f2f2f2;
-            padding: 20px;
-            border-radius: 12px;
-        }
-
-        h2 {
-            text-align: center;
-        }
-
-        p {
-            font-size: 18px;
-        }
-
-        input, button {
-            width: 100%;
-            padding: 12px;
-            font-size: 18px;
-            margin-top: 10px;
-        }
-
-        button {
-            background-color: #0078d7;
-            color: white;
-            border: none;
-            border-radius: 6px;
-        }
-    </style>
+  <title>Thermostat</title>
 </head>
-
 <body>
+<h1>Living Room</h1>
 
-<div class="card">
-    <h2>Living Room</h2>
+<p>Temperature: <span id="temp">--</span> °C</p>
+<p>Setpoint: <span id="setpoint">--</span> °C</p>
+<p>Status: <span id="heating">--</span></p>
 
-    <p><strong>Temperature:</strong>
-        {{ thermostat.temperature if thermostat.temperature is not none else "—" }} °C
-    </p>
+<form action="/setpoint" method="post">
+  <input type="number" name="setpoint" step="0.5">
+  <button type="submit">Set</button>
+</form>
 
-    <p><strong>Setpoint:</strong>
-        {{ thermostat.setpoint if thermostat.setpoint is not none else "—" }} °C
-    </p>
+<br>
+<a href="/settings">Settings</a>
 
-    <p><strong>Heating:</strong>
-        {% if thermostat.heating is none %}
-            —
-        {% elif thermostat.heating %}
-            ON
-        {% else %}
-            OFF
-        {% endif %}
-    </p>
+<script>
+async function refresh() {
+  const res = await fetch("/api/state");
+  const data = await res.json();
 
-    <form method="POST">
-        <input
-            type="number"
-            step="0.5"
-            name="setpoint"
-            placeholder="New setpoint"
-            required
-        >
-        <button type="submit">Set Temperature</button>
-    </form>
-</div>
+  if (data.temperature !== null) {
+    document.getElementById("temp").innerText = data.temperature;
+  }
+  if (data.setpoint !== null) {
+    document.getElementById("setpoint").innerText = data.setpoint;
+  }
+  document.getElementById("heating").innerText =
+    data.heating ? "ON" : "OFF";
+}
+
+setInterval(refresh, 2000);
+refresh();
+</script>
 
 </body>
 </html>

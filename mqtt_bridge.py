@@ -1,52 +1,35 @@
 import json
-import threading
 import paho.mqtt.client as mqtt
 
-BROKER_IP = "192.168.4.26"   # <-- PI IP
-BROKER_PORT = 1883
+BROKER_IP = "192.168.4.26"
 THERMO_ID = "livingroom"
-
-# Single source of truth for Flask
-thermostat_state = {
-    "temperature": None,
-    "setpoint": None,
-    "heating": None
-}
-
 
 class MqttBridge:
     def __init__(self):
-        self.client = mqtt.Client(client_id="flask-dashboard")
+        self.state = {
+            "temperature": None,
+            "setpoint": None,
+            "heating": False
+        }
 
+        self.client = mqtt.Client(client_id="flask-dashboard")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
-
-        self.client.connect(BROKER_IP, BROKER_PORT, 60)
-
-        thread = threading.Thread(
-            target=self.client.loop_forever,
-            daemon=True
-        )
-        thread.start()
+        self.client.connect(BROKER_IP, 1883, 60)
+        self.client.loop_start()
 
     def on_connect(self, client, userdata, flags, rc):
         print("Flask connected to MQTT, rc =", rc)
-        client.subscribe(f"thermostat/{THERMO_ID}/#", qos=1)
+        client.subscribe(f"thermostat/{THERMO_ID}/#")
 
     def on_message(self, client, userdata, msg):
-        global thermostat_state
+        if msg.topic.endswith("/temperature"):
+            self.state["temperature"] = json.loads(msg.payload)["temperature"]
 
-        topic = msg.topic
-        payload = msg.payload.decode()
-
-        if topic == f"thermostat/{THERMO_ID}/temperature":
-            data = json.loads(payload)
-            thermostat_state["temperature"] = data["temperature"]
-
-        elif topic == f"thermostat/{THERMO_ID}/state":
-            data = json.loads(payload)
-            thermostat_state["setpoint"] = data["setpoint"]
-            thermostat_state["heating"] = data["heating"]
+        elif msg.topic.endswith("/state"):
+            data = json.loads(msg.payload)
+            self.state["setpoint"] = data["setpoint"]
+            self.state["heating"] = data["heating"]
 
     def publish_setpoint(self, value):
         self.client.publish(
@@ -55,3 +38,14 @@ class MqttBridge:
             qos=1,
             retain=True
         )
+
+    def publish_settings(self, settings):
+        self.client.publish(
+            f"thermostat/{THERMO_ID}/settings",
+            json.dumps(settings),
+            qos=1,
+            retain=True
+        )
+
+    def get_state(self):
+        return self.state
