@@ -1,41 +1,56 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Thermostat</title>
-</head>
-<body>
-<h1>Living Room</h1>
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
 
-<p>Temperature: <span id="temp">--</span> °C</p>
-<p>Setpoint: <span id="setpoint">--</span> °C</p>
-<p>Status: <span id="heating">--</span></p>
+<div id="cards" class="grid">
+  {% for tid in thermostats %}
+  <section class="card" data-thermo-id="{{ tid }}">
+    <div class="card-head">
+      <div>
+        <div class="card-title">{{ tid|capitalize }}</div>
+        <div class="muted" data-role="status">Loading…</div>
+      </div>
+      <a class="link" href="/thermostat/{{ tid }}/settings">Settings</a>
+    </div>
 
-<form action="/setpoint" method="post">
-  <input type="number" name="setpoint" step="0.5">
-  <button type="submit">Set</button>
-</form>
+    <div class="reading">
+      <div class="big" data-role="temp">--.-</div>
+      <div class="unit">°C</div>
+    </div>
 
-<br>
-<a href="/settings">Settings</a>
+    <div class="row">
+      <div class="pill">
+        <span class="muted">Setpoint</span>
+        <span class="value" data-role="setpoint">--.-</span><span class="muted"> °C</span>
+      </div>
+      <div class="pill" data-role="heatpill">
+        <span class="muted">Heat</span>
+        <span class="value" data-role="heating">--</span>
+      </div>
+    </div>
 
-<script>
-async function refresh() {
-  const res = await fetch("/api/state");
-  const data = await res.json();
+    <form class="controls" method="POST" action="/thermostat/{{ tid }}/setpoint">
+        <div class="setpoint-controls">
+            <button type="button" class="btn" data-action="dec">−0.5</button>
+            <input id="sp-{{ tid }}" class="input" name="setpoint" type="number"
+                inputmode="decimal" step="0.5" min="5" max="35" value="20.0" />
+            <button type="button" class="btn" data-action="inc">+0.5</button>
+            <button type="submit" class="btn primary">Set</button>
+        </div>
 
-  if (data.temperature !== null) {
-    document.getElementById("temp").innerText = data.temperature;
-  }
-  if (data.setpoint !== null) {
-    document.getElementById("setpoint").innerText = data.setpoint;
-  }
-  document.getElementById("heating").innerText =
-    data.heating ? "ON" : "OFF";
-}
+        <div class="preset-row">
+            <button type="button" class="btn preset" data-role="preset" data-name="Home" disabled>Home</button>
+            <button type="button" class="btn preset" data-role="preset" data-name="Sleep" disabled>Sleep</button>
+            <button type="button" class="btn preset" data-role="preset" data-name="Away" disabled>Away</button>
+        </div>
 
-setInterval(refresh, 2000);
-refresh();
-</script>
+        <div class="muted small">Tip: type a number or use ±0.5 buttons.</div>
+    </form>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
 
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

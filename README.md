@@ -173,21 +173,7 @@ Save and exit.
 
 ---
 
-### 2. Ensure main config includes conf.d
-
-```bash
-sudo nano /etc/mosquitto/mosquitto.conf
-```
-
-Ensure this line exists:
-
-```
-include_dir /etc/mosquitto/conf.d
-```
-
----
-
-### 3. Restart and verify
+### 2. Restart and verify
 
 ```bash
 sudo systemctl restart mosquitto
