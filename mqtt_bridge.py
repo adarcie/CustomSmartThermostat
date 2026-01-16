@@ -3,7 +3,7 @@ import json
 import paho.mqtt.client as mqtt
 from collections import defaultdict
 
-BROKER_IP = "192.168.4.26"
+BROKER_IP = "192.168.4.195"
 
 # Add more later, e.g. ["livingroom", "bedroom"]
 THERMOSTATS = ["livingroom"]

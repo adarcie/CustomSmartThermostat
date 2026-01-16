@@ -60,6 +60,101 @@ CustomSmartThermostat/
 
 ---
 
+## 🧠 Thermostat Node — GPIO Pinout
+
+The thermostat node uses a Raspberry Pi to drive a stepper valve, read a DS18B20 temperature sensor, and monitor two limit switches.
+
+All GPIO numbers below use **BCM (Broadcom) numbering**.
+
+---
+
+## 🔌 Raspberry Pi 4 Pinout (Primary Node)
+
+### Stepper Motor (ULN2003 / similar driver)
+
+| Function | Driver Pin | BCM GPIO | Physical Pin |
+|----------|------------|-----------|--------------|
+| Coil A   | IN1        | GPIO17    | Pin 11       |
+| Coil B   | IN2        | GPIO18    | Pin 12       |
+| Coil C   | IN3        | GPIO27    | Pin 13       |
+| Coil D   | IN4        | GPIO22    | Pin 15       |
+| GND      | GND        | —         | Any GND pin  |
+
+> These correspond to:  
+> `MOTOR_PINS = [17, 18, 27, 22]` in `thermostat_node.py`.
+
+---
+
+### Limit Switches (Endstops)
+
+Wired using **2-wire mode (Signal + GND, no VCC)** with internal pull-ups enabled.
+
+| Switch | BCM GPIO | Physical Pin | Wiring |
+|--------|-----------|--------------|--------|
+| MIN    | GPIO16    | Pin 36       | Signal → GPIO16, GND → Pi GND |
+| MAX    | GPIO26    | Pin 37       | Signal → GPIO26, GND → Pi GND |
+| GND    | —         | Any GND pin  | Shared ground for both switches |
+
+---
+
+### Temperature Sensor (DS18B20, 1-Wire)
+
+| Function | BCM GPIO | Physical Pin | Notes |
+|----------|-----------|--------------|-------|
+| Data     | GPIO4     | Pin 7        | 1-Wire bus |
+| VCC      | 3.3V      | Pin 1        | Power |
+| GND      | GND       | Pin 9        | Ground |
+
+> The sensor is read via Linux 1-Wire at:
+> ```
+> /sys/bus/w1/devices/28-*/w1_slave
+> ```
+
+---
+
+## 🔄 Equivalent Pinout — Raspberry Pi Zero
+
+The **BCM GPIO numbers are the same**, so your wiring and code do **not change**.  
+Only the **physical pin locations** differ.
+
+### Pi Zero (40-pin header) — Equivalent Mapping
+
+#### Stepper Motor
+
+| Function | BCM GPIO | Pi Zero Physical Pin |
+|----------|-----------|----------------------|
+| IN1      | GPIO17    | Pin 11 |
+| IN2      | GPIO18    | Pin 12 |
+| IN3      | GPIO27    | Pin 13 |
+| IN4      | GPIO22    | Pin 15 |
+| GND      | —         | Any GND pin |
+
+#### Limit Switches
+
+| Switch | BCM GPIO | Pi Zero Physical Pin |
+|--------|-----------|----------------------|
+| MIN    | GPIO16    | Pin 36 |
+| MAX    | GPIO26    | Pin 37 |
+| GND    | —         | Any GND pin |
+
+#### DS18B20 Temperature Sensor
+
+| Function | BCM GPIO | Pi Zero Physical Pin |
+|----------|-----------|----------------------|
+| Data     | GPIO4     | Pin 7 |
+| 3.3V     | —         | Pin 1 |
+| GND      | —         | Pin 9 |
+
+---
+
+## 📝 Notes
+
+- The limit switches are **active-low** (pressed = 0), using the Pi’s internal pull-ups.
+- No external 5V is connected to the limit switch signal lines.
+- The same pinout works for **Pi 4 and Pi Zero** when using BCM numbering.
+
+---
+
 # PART 1 — Windows PC (Flask Dashboard)
 
 ## Requirements

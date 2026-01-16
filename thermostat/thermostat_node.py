@@ -4,7 +4,7 @@ import glob
 import paho.mqtt.client as mqtt
 from stepper import StepperMotor
 
-BROKER_IP = "192.168.4.26"
+BROKER_IP = "192.168.4.195"
 THERMO_ID = "livingroom"
 
 TEMP_TOPIC = f"thermostat/{THERMO_ID}/temperature"
@@ -34,7 +34,8 @@ def read_temp():
     return float(temp_string) / 1000.0
 
 MOTOR_PINS = [17, 18, 27, 22]  # BCM pins
-motor = StepperMotor(MOTOR_PINS, delay=0.002)
+motor = StepperMotor(MOTOR_PINS, delay=0.002, backoff_steps=1000, verbose=True)
+
 
 def on_connect(client, userdata, flags, rc):
     print("Thermostat connected to MQTT with code", rc)
